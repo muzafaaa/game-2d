@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game Sepak Bola 2D - 1 vs 1</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            background: #2c5530;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .game-container {
+            border: 4px solid #fff;
+            background: #000;
+            position: relative;
+        }
+        
+        canvas {
+            display: block;
+            image-rendering: pixelated;
+            image-rendering: -moz-crisp-edges;
+            image-rendering: crisp-edges;
+        }
+        
+        .controls {
+            color: white;
+            text-align: center;
+            margin-top: 10px;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        
+        .scoreboard {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-size: 18px;
+            font-weight: bold;
+            z-index: 10;
+            text-shadow: 2px 2px 0px #000;
+            text-align: center;
+        }
+        
+        .player-labels {
+            position: absolute;
+            top: 50px;
+            left: 10px;
+            right: 10px;
+            display: flex;
+            justify-content: space-between;
+            color: white;
+            font-size: 12px;
+            z-index: 10;
+        }
+        
+        .winner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ffff00;
+            font-size: 24px;
+            font-weight: bold;
+            text-shadow: 2px 2px 0px #000;
+            z-index: 20;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <div class="scoreboard">
+            <div>PLAYER 1: <span id="player1Score">0</span> - <span id="player2Score">0</span> :PLAYER 2</div>
+        </div>
+        <div class="player-labels">
+            <div style="color: #ff4444;">Player 1 (Merah)</div>
+            <div style="color: #4444ff;">Player 2 (Biru)</div>
+        </div>
+        <div id="winnerText" class="winner" style="display: none;"></div>
+        <canvas id="gameCanvas" width="800" height="400"></canvas>
+        <div class="controls">
+            <strong>Player 1:</strong> WASD untuk bergerak | <strong>Player 2:</strong> Arrow Keys (↑ ↓ ← →) untuk bergerak<br>
+            <strong>Aturan:</strong> Ambil power-up ⚡ setiap 5 detik untuk boost! | Tiang gawang memantulkan bola | First to 5 goals wins!
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const player1ScoreElement = document.getElementById('player1Score');
+        const player2ScoreElement = document.getElementById('player2Score');
+        const winnerElement = document.getElementById('winnerText');
+        
+        // Game state
+        let player1Score = 0;
+        let player2Score = 0;
+        let gameWon = false;
+        let keys = {};
+        
+        // Game objects
+        const ball = {
+            x: 400,
+            y: 200,
+            size: 8,
+            vx: 0,
+            vy: 0,
+            maxSpeed: 6,
+            friction: 0.98,
+            color: '#ffffff'
+        };
+        
+        const player1 = {
+            x: 100,
+            y: 180,
+            width: 16,
+            height: 20,
+            speed: 3,
+            baseSpeed: 3,
+            color: '#ff4444',
+            kickPower: 4,
+            baseKickPower: 4,
+            boostTime: 0,
+            boostDuration: 3000
+        };
+        
+        const player2 = {
+            x: 684,
+            y: 180,
+            width: 16,
+            height: 20,
+            speed: 3,
+            baseSpeed: 3,
+            color: '#4444ff',
+            kickPower: 4,
+            baseKickPower: 4,
+            boostTime: 0,
+            boostDuration: 3000
+        };
+        
+        // Power-up system
+        const powerUp = {
+            x: 0,
+            y: 0,
+            size: 12,
+            active: false,
+            spawnTime: 5000,
+            lastSpawn: 0,
+            type: 'speed',
+            color: '#ffff00'
+        };
+        
+        const leftGoal = {
+            x: 0,
+            y: 150,
+            width: 50,
+            height: 100,
+            postWidth: 8
+        };
+        
+        const rightGoal = {
+            x: 750,
+            y: 150,
+            width: 50,
+            height: 100,
+            postWidth: 8
+        };
+        
+        // Audio context untuk sound effects
+        let audioContext;
+        
+        function initAudio() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            } catch (e) {
+                console.log('Audio not supported');
+            }
+        }
+        
+        function playSound(frequency, duration, type = 'sine') {
+            if (!audioContext) return;
+            
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            
+            oscillator.frequency.value = frequency;
+            oscillator.type = type;
+            
+            gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration);
+            
+            oscillator.start(audioContext.currentTime);
+            oscillator.stop(audioContext.currentTime + duration);
+        }
+        
+        // Event listeners
+        document.addEventListener('keydown', (e) => {
+            keys[e.key.toLowerCase()] = true;
+            
+            // Initialize audio on first user interaction
+            if (!audioContext) {
+                initAudio();
+            }
+            
+            // Restart game when won
+            if (gameWon && e.key === ' ') {
+                restartGame();
+            }
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keys[e.key.toLowerCase()] = false;
+        });
+        
+        // Game functions
+        function drawField() {
+            // Grass field
+            ctx.fillStyle = '#2d5a32';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Field lines
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 2;
+            
+            // Center line
+            ctx.beginPath();
+            ctx.moveTo(canvas.width / 2, 0);
+            ctx.lineTo(canvas.width / 2, canvas.height);
+            ctx.stroke();
+            
+            // Center circle
+            ctx.beginPath();
+            ctx.arc(canvas.width / 2, canvas.height / 2, 40, 0, 2 * Math.PI);
+            ctx.stroke();
+            
+            // Left penalty area
+            ctx.strokeRect(0, 100, 80, 200);
+            ctx.strokeRect(0, 130, 40, 140);
+            
+            // Right penalty area
+            ctx.strokeRect(720, 100, 80, 200);
+            ctx.strokeRect(760, 130, 40, 140);
+        }
+        
+        function drawGoal(goal, isLeft = true) {
+            // Goal posts
+            ctx.fillStyle = '#ffffff';
+            if (isLeft) {
+                ctx.fillRect(goal.x, goal.y, goal.postWidth, goal.height);
+                ctx.fillRect(goal.x, goal.y, goal.width, goal.postWidth);
+                ctx.fillRect(goal.x, goal.y + goal.height - goal.postWidth, goal.width, goal.postWidth);
+            } else {
+                ctx.fillRect(goal.x + goal.width - goal.postWidth, goal.y, goal.postWidth, goal.height);
+                ctx.fillRect(goal.x, goal.y, goal.width, goal.postWidth);
+                ctx.fillRect(goal.x, goal.y + goal.height - goal.postWidth, goal.width, goal.postWidth);
+            }
+            
+            // Net pattern
+            ctx.strokeStyle = '#cccccc';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < 6; i++) {
+                ctx.beginPath();
+                ctx.moveTo(goal.x + (isLeft ? goal.postWidth : 0), goal.y + goal.postWidth + i * 14);
+                ctx.lineTo(goal.x + (isLeft ? goal.width : goal.width - goal.postWidth), goal.y + goal.postWidth + i * 14);
+                ctx.stroke();
+            }
+            for (let i = 0; i < 4; i++) {
+                ctx.beginPath();
+                ctx.moveTo(goal.x + (isLeft ? goal.postWidth : 0) + i * 10, goal.y + goal.postWidth);
+                ctx.lineTo(goal.x + (isLeft ? goal.postWidth : 0) + i * 10, goal.y + goal.height - goal.postWidth);
+                ctx.stroke();
+            }
+        }
+        
+        function drawBall() {
+            ctx.fillStyle = ball.color;
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.size, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // Ball pattern
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.size * 0.6, 0, 2 * Math.PI);
+            ctx.stroke();
+        }
+        
+        function drawPlayer(player, isPlayer1 = true) {
+            // Player glow effect when boosted
+            if (player.boostTime > 0) {
+                ctx.shadowColor = isPlayer1 ? '#ff4444' : '#4444ff';
+                ctx.shadowBlur = 10;
+            }
+            
+            // Player body
+            ctx.fillStyle = player.boostTime > 0 ? (isPlayer1 ? '#ff8888' : '#8888ff') : player.color;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            
+            // Player head
+            ctx.fillStyle = '#fdbcb4';
+            ctx.fillRect(player.x + 2, player.y - 6, player.width - 4, 6);
+            
+            // Player number
+            ctx.fillStyle = '#ffffff';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText(isPlayer1 ? '1' : '2', player.x + player.width/2, player.y + player.height/2 + 3);
+            
+            // Reset shadow
+            ctx.shadowBlur = 0;
+        }
+        
+        function drawPowerUp() {
+            if (!powerUp.active) return;
+            
+            // Power-up glow
+            ctx.shadowColor = powerUp.color;
+            ctx.shadowBlur = 15;
+            
+            // Power-up box
+            ctx.fillStyle = powerUp.color;
+            ctx.fillRect(powerUp.x - powerUp.size/2, powerUp.y - powerUp.size/2, powerUp.size, powerUp.size);
+            
+            // Power-up symbol
+            ctx.fillStyle = '#000000';
+            ctx.font = '10px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('⚡', powerUp.x, powerUp.y + 3);
+            
+            // Reset shadow
+            ctx.shadowBlur = 0;
+        }
+        
+        function updatePlayers() {
+            if (gameWon) return;
+            
+            const currentTime = Date.now();
+            
+            // Update boost timers
+            if (player1.boostTime > 0) {
+                player1.boostTime -= 16; // Assuming 60fps
+                if (player1.boostTime <= 0) {
+                    player1.speed = player1.baseSpeed;
+                    player1.kickPower = player1.baseKickPower;
+                }
+            }
+            
+            if (player2.boostTime > 0) {
+                player2.boostTime -= 16;
+                if (player2.boostTime <= 0) {
+                    player2.speed = player2.baseSpeed;
+                    player2.kickPower = player2.baseKickPower;
+                }
+            }
+            
+            // Player 1 controls (WASD) - can move anywhere in the field
+            if (keys['w'] && player1.y > 0) player1.y -= player1.speed;
+            if (keys['s'] && player1.y < canvas.height - player1.height) player1.y += player1.speed;
+            if (keys['a'] && player1.x > 0) player1.x -= player1.speed;
+            if (keys['d'] && player1.x < canvas.width - player1.width) player1.x += player1.speed;
+            
+            // Player 2 controls (Arrow keys) - can move anywhere in the field
+            if (keys['arrowup'] && player2.y > 0) player2.y -= player2.speed;
+            if (keys['arrowdown'] && player2.y < canvas.height - player2.height) player2.y += player2.speed;
+            if (keys['arrowleft'] && player2.x > 0) player2.x -= player2.speed;
+            if (keys['arrowright'] && player2.x < canvas.width - player2.width) player2.x += player2.speed;
+            
+            // Check power-up collisions
+            checkPowerUpCollisions();
+        }
+        
+        function updatePowerUp() {
+            const currentTime = Date.now();
+            
+            // Spawn power-up every 5 seconds
+            if (!powerUp.active && currentTime - powerUp.lastSpawn > powerUp.spawnTime) {
+                spawnPowerUp();
+                powerUp.lastSpawn = currentTime;
+            }
+        }
+        
+        function spawnPowerUp() {
+            // Random position in the center area of the field
+            powerUp.x = 200 + Math.random() * 400;
+            powerUp.y = 50 + Math.random() * 300;
+            powerUp.active = true;
+            
+            // Random power-up type
+            const types = ['speed', 'power'];
+            powerUp.type = types[Math.floor(Math.random() * types.length)];
+            powerUp.color = powerUp.type === 'speed' ? '#ffff00' : '#ff8800';
+        }
+        
+        function checkPowerUpCollisions() {
+            if (!powerUp.active) return;
+            
+            // Check Player 1 collision
+            if (player1.x < powerUp.x + powerUp.size/2 && 
+                player1.x + player1.width > powerUp.x - powerUp.size/2 &&
+                player1.y < powerUp.y + powerUp.size/2 && 
+                player1.y + player1.height > powerUp.y - powerUp.size/2) {
+                
+                applyPowerUp(player1);
+                powerUp.active = false;
+                playSound(523, 0.3, 'sine');
+            }
+            
+            // Check Player 2 collision
+            if (player2.x < powerUp.x + powerUp.size/2 && 
+                player2.x + player2.width > powerUp.x - powerUp.size/2 &&
+                player2.y < powerUp.y + powerUp.size/2 && 
+                player2.y + player2.height > powerUp.y - powerUp.size/2) {
+                
+                applyPowerUp(player2);
+                powerUp.active = false;
+                playSound(523, 0.3, 'sine');
+            }
+        }
+        
+        function applyPowerUp(player) {
+            if (powerUp.type === 'speed') {
+                player.speed = player.baseSpeed * 1.8;
+                player.boostTime = player.boostDuration;
+            } else if (powerUp.type === 'power') {
+                player.kickPower = player.baseKickPower * 1.5;
+                player.boostTime = player.boostDuration;
+            }
+        }
+        
+        function updateBall() {
+            if (gameWon) return;
+            
+            // Apply physics
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+            
+            // Apply friction
+            ball.vx *= ball.friction;
+            ball.vy *= ball.friction;
+            
+            // Boundary collisions (top and bottom walls)
+            if (ball.y - ball.size <= 0 || ball.y + ball.size >= canvas.height) {
+                ball.vy *= -0.8;
+                ball.y = Math.max(ball.size, Math.min(canvas.height - ball.size, ball.y));
+                playSound(200, 0.1, 'square');
+            }
+            
+            // Left side collision (excluding goal area)
+            if (ball.x - ball.size <= 0) {
+                if (ball.y < leftGoal.y || ball.y > leftGoal.y + leftGoal.height) {
+                    ball.vx *= -0.8;
+                    ball.x = ball.size;
+                    playSound(200, 0.1, 'square');
+                }
+            }
+            
+            // Right side collision (excluding goal area)
+            if (ball.x + ball.size >= canvas.width) {
+                if (ball.y < rightGoal.y || ball.y > rightGoal.y + rightGoal.height) {
+                    ball.vx *= -0.8;
+                    ball.x = canvas.width - ball.size;
+                    playSound(200, 0.1, 'square');
+                }
+            }
+            
+            // Goal post collisions
+            checkGoalPostCollisions();
+        }
+        
+        function checkGoalPostCollisions() {
+            // Left goal posts
+            // Top post
+            if (ball.x - ball.size <= leftGoal.postWidth && 
+                ball.y >= leftGoal.y && ball.y <= leftGoal.y + leftGoal.postWidth &&
+                ball.x > 0) {
+                ball.vy *= -0.8;
+                ball.y = leftGoal.y + leftGoal.postWidth + ball.size;
+                playSound(300, 0.15, 'square');
+            }
+            // Bottom post
+            if (ball.x - ball.size <= leftGoal.postWidth && 
+                ball.y >= leftGoal.y + leftGoal.height - leftGoal.postWidth && 
+                ball.y <= leftGoal.y + leftGoal.height &&
+                ball.x > 0) {
+                ball.vy *= -0.8;
+                ball.y = leftGoal.y + leftGoal.height - leftGoal.postWidth - ball.size;
+                playSound(300, 0.15, 'square');
+            }
+            // Left post
+            if (ball.x - ball.size <= leftGoal.postWidth && 
+                ball.y >= leftGoal.y && ball.y <= leftGoal.y + leftGoal.height) {
+                ball.vx *= -0.8;
+                ball.x = leftGoal.postWidth + ball.size;
+                playSound(300, 0.15, 'square');
+            }
+            
+            // Right goal posts
+            // Top post
+            if (ball.x + ball.size >= rightGoal.x + rightGoal.width - rightGoal.postWidth && 
+                ball.y >= rightGoal.y && ball.y <= rightGoal.y + rightGoal.postWidth &&
+                ball.x < canvas.width) {
+                ball.vy *= -0.8;
+                ball.y = rightGoal.y + rightGoal.postWidth + ball.size;
+                playSound(300, 0.15, 'square');
+            }
+            // Bottom post
+            if (ball.x + ball.size >= rightGoal.x + rightGoal.width - rightGoal.postWidth && 
+                ball.y >= rightGoal.y + rightGoal.height - rightGoal.postWidth && 
+                ball.y <= rightGoal.y + rightGoal.height &&
+                ball.x < canvas.width) {
+                ball.vy *= -0.8;
+                ball.y = rightGoal.y + rightGoal.height - rightGoal.postWidth - ball.size;
+                playSound(300, 0.15, 'square');
+            }
+            // Right post
+            if (ball.x + ball.size >= rightGoal.x + rightGoal.width - rightGoal.postWidth && 
+                ball.y >= rightGoal.y && ball.y <= rightGoal.y + rightGoal.height) {
+                ball.vx *= -0.8;
+                ball.x = rightGoal.x + rightGoal.width - rightGoal.postWidth - ball.size;
+                playSound(300, 0.15, 'square');
+            }
+        }
+        
+        function checkPlayerBallCollision(player) {
+            const dx = ball.x - (player.x + player.width/2);
+            const dy = ball.y - (player.y + player.height/2);
+            const distance = Math.sqrt(dx*dx + dy*dy);
+            
+            if (distance < ball.size + Math.max(player.width, player.height)/2) {
+                // Calculate kick direction
+                const angle = Math.atan2(dy, dx);
+                const power = player.kickPower;
+                
+                ball.vx = Math.cos(angle) * power;
+                ball.vy = Math.sin(angle) * power;
+                
+                // Move ball away from player to prevent sticking
+                ball.x = player.x + player.width/2 + Math.cos(angle) * (ball.size + 15);
+                ball.y = player.y + player.height/2 + Math.sin(angle) * (ball.size + 15);
+                
+                playSound(250, 0.1, 'square');
+            }
+        }
+        
+        function checkGoals() {
+            // Left goal (Player 2 scores)
+            if (ball.x - ball.size <= leftGoal.postWidth && 
+                ball.y >= leftGoal.y + leftGoal.postWidth && 
+                ball.y <= leftGoal.y + leftGoal.height - leftGoal.postWidth) {
+                
+                player2Score++;
+                player2ScoreElement.textContent = player2Score;
+                resetBall();
+                playGoalSound();
+                
+                if (player2Score >= 5) {
+                    gameWon = true;
+                    winnerElement.textContent = 'PLAYER 2 WINS!\nPress SPACE to restart';
+                    winnerElement.style.display = 'block';
+                }
+            }
+            
+            // Right goal (Player 1 scores)
+            if (ball.x + ball.size >= rightGoal.x + rightGoal.width - rightGoal.postWidth && 
+                ball.y >= rightGoal.y + rightGoal.postWidth && 
+                ball.y <= rightGoal.y + rightGoal.height - rightGoal.postWidth) {
+                
+                player1Score++;
+                player1ScoreElement.textContent = player1Score;
+                resetBall();
+                playGoalSound();
+                
+                if (player1Score >= 5) {
+                    gameWon = true;
+                    winnerElement.textContent = 'PLAYER 1 WINS!\nPress SPACE to restart';
+                    winnerElement.style.display = 'block';
+                }
+            }
+        }
+        
+        function resetBall() {
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            ball.vx = 0;
+            ball.vy = 0;
+        }
+        
+        function playGoalSound() {
+            playSound(440, 0.3, 'sine');
+            setTimeout(() => playSound(554, 0.3, 'sine'), 150);
+            setTimeout(() => playSound(659, 0.5, 'sine'), 300);
+        }
+        
+        function restartGame() {
+            player1Score = 0;
+            player2Score = 0;
+            gameWon = false;
+            player1ScoreElement.textContent = '0';
+            player2ScoreElement.textContent = '0';
+            winnerElement.style.display = 'none';
+            
+            // Reset positions
+            player1.x = 100;
+            player1.y = 180;
+            player2.x = 684;
+            player2.y = 180;
+            
+            // Reset player stats
+            player1.speed = player1.baseSpeed;
+            player1.kickPower = player1.baseKickPower;
+            player1.boostTime = 0;
+            player2.speed = player2.baseSpeed;
+            player2.kickPower = player2.baseKickPower;
+            player2.boostTime = 0;
+            
+            // Reset power-up
+            powerUp.active = false;
+            powerUp.lastSpawn = Date.now();
+            
+            resetBall();
+        }
+        
+        function gameLoop() {
+            // Clear canvas
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw game elements
+            drawField();
+            drawGoal(leftGoal, true);
+            drawGoal(rightGoal, false);
+            drawPowerUp();
+            drawBall();
+            drawPlayer(player1, true);
+            drawPlayer(player2, false);
+            
+            // Update game objects
+            updatePlayers();
+            updateBall();
+            updatePowerUp();
+            checkPlayerBallCollision(player1);
+            checkPlayerBallCollision(player2);
+            checkGoals();
+            
+            // Continue game loop
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Start the game
+        gameLoop();
+    </script>
+</body>
+</html>
